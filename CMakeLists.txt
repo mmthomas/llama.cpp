@@ -195,6 +195,9 @@ endif()
 
 add_subdirectory(src)
 
+# Heirloom C-ABI shim (fork delta) — builds heirloom_llama.dll for .NET P/Invoke.
+add_subdirectory(heirloom)
+
 #
 # utils, programs, examples and tests
 #
