@@ -36,6 +36,14 @@ HL_API int hl_complete(hl_model* m, const char* prompt, int n_predict,
                        int n_ctx, int n_ubatch, int flash_attn,
                        char* out, int out_cap);
 
+// Vision: caption/answer about an image via an mmproj (multimodal projector). Applies the model's chat
+// template around (media-marker + user_prompt), runs the mtmd encode+decode, then generates. flash_attn
+// forced off (sm_120a). image_min_tokens<=0 = model default (Qwen-VL wants >=1024 for grounding).
+// Writes a null-terminated UTF-8 string into out. Returns bytes written, or -1.
+HL_API int hl_caption(hl_model* m, const char* mmproj_path, const char* image_path, const char* user_prompt,
+                      int n_predict, int n_ctx, int n_ubatch, int image_min_tokens,
+                      char* out, int out_cap);
+
 #ifdef __cplusplus
 }
 #endif
