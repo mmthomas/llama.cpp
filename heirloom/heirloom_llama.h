@@ -30,10 +30,15 @@ HL_API int64_t hl_n_params(hl_model* m);
 HL_API int     hl_desc(hl_model* m, char* out, int out_cap); // bytes written (excl. null), or -1
 
 // One-shot raw completion (no chat template — caller owns templating for now).
-//   flash_attn: 0 = disabled, 1 = enabled (NOTE: enabled fast-fails on sm_120a at the current commit).
+//   flash_attn: 0 = disabled, 1 = enabled.
+//   temp/top_p/top_k/repeat_penalty: sampler knobs (<=0 / <=1.0 fall back to mild defaults; repeat_penalty<=1 = off).
+//   cancel: optional pointer to an int polled once per generated token — nonzero stops generation (cooperative
+//           cancel for user-Stop / GPU reclaim). Pass null to disable.
 // Writes a null-terminated UTF-8 string into out (truncated to out_cap-1). Returns bytes written, or -1.
 HL_API int hl_complete(hl_model* m, const char* prompt, int n_predict,
                        int n_ctx, int n_ubatch, int flash_attn,
+                       float temp, float top_p, int top_k, float repeat_penalty,
+                       const int* cancel,
                        char* out, int out_cap);
 
 // Vision: caption/answer about an image via an mmproj (multimodal projector). Applies the model's chat

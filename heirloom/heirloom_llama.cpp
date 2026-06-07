@@ -43,6 +43,8 @@ int hl_desc(hl_model* m, char* out, int out_cap) {
 
 int hl_complete(hl_model* m, const char* prompt, int n_predict,
                 int n_ctx, int n_ubatch, int flash_attn,
+                float temp, float top_p, int top_k, float repeat_penalty,
+                const int* cancel,
                 char* out, int out_cap) {
     if (!m || !m->model || !prompt || !out || out_cap <= 0) return -1;
     const llama_vocab* vocab = llama_model_get_vocab(m->model);
@@ -63,12 +65,16 @@ int hl_complete(hl_model* m, const char* prompt, int n_predict,
     std::vector<llama_token> toks((size_t)n_prompt);
     if (llama_tokenize(vocab, prompt, len, toks.data(), n_prompt, true, true) < 0) { llama_free(ctx); return -1; }
 
-    // Sampler chain: top-k / top-p / temp / dist (mild, for natural text in the smoke).
+    // Sampler chain: caller-tuned (optional repetition penalty -> top-k -> top-p -> temp -> dist); non-positive
+    // values fall back to mild defaults. Penalty first so it adjusts logits before truncation/temperature.
     llama_sampler_chain_params sp = llama_sampler_chain_default_params();
     llama_sampler* smpl = llama_sampler_chain_init(sp);
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.95f, 1));
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
+    if (repeat_penalty > 1.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, repeat_penalty, 0.0f, 0.0f));
+    }
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k > 0 ? top_k : 40));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p > 0.0f ? top_p : 0.95f, 1));
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp > 0.0f ? temp : 0.7f));
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
     std::string result;
@@ -92,6 +98,7 @@ int hl_complete(hl_model* m, const char* prompt, int n_predict,
     int n_gen = 0;
     llama_token next = 0; // stable address across iterations for the single-token batch
     for (int i = 0; prefilled && i < n_predict; ++i) {
+        if (cancel && *(const volatile int*)cancel) break;   // cooperative cancel (user Stop / GPU reclaim)
         next = llama_sampler_sample(smpl, ctx, -1);
         if (llama_vocab_is_eog(vocab, next)) break;
         int np = llama_token_to_piece(vocab, next, piece, (int32_t)sizeof(piece), 0, true);
