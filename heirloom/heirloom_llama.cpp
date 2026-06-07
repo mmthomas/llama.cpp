@@ -4,6 +4,8 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 
+#include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -72,6 +74,8 @@ int hl_complete(hl_model* m, const char* prompt, int n_predict,
     std::string result;
     char piece[512];
 
+    const auto t_start = std::chrono::steady_clock::now();
+
     // Prefill the prompt in n_batch-sized chunks: a single llama_decode is capped at n_batch (logical), so a
     // long prompt (e.g. the agent's grammar system prompt) must be fed in pieces rather than one batch.
     bool prefilled = true;
@@ -82,15 +86,31 @@ int hl_complete(hl_model* m, const char* prompt, int n_predict,
         if (llama_decode(ctx, chunk) != 0) { prefilled = false; break; }
     }
 
+    const auto t_prefilled = std::chrono::steady_clock::now();
+
     // Generate from the last prompt position (logits of the final prefill token).
+    int n_gen = 0;
     llama_token next = 0; // stable address across iterations for the single-token batch
     for (int i = 0; prefilled && i < n_predict; ++i) {
         next = llama_sampler_sample(smpl, ctx, -1);
         if (llama_vocab_is_eog(vocab, next)) break;
         int np = llama_token_to_piece(vocab, next, piece, (int32_t)sizeof(piece), 0, true);
         if (np > 0) result.append(piece, (size_t)np);
+        ++n_gen;
         llama_batch gen = llama_batch_get_one(&next, 1);
         if (llama_decode(ctx, gen) != 0) break;
+    }
+
+    // Per-turn timing breakdown (stderr → daemon.err.log): isolates prefill vs generation so we optimize the
+    // real bottleneck (generation t/s vs re-prefill cost) rather than guess.
+    {
+        const auto t_end = std::chrono::steady_clock::now();
+        double prefill_ms = std::chrono::duration<double, std::milli>(t_prefilled - t_start).count();
+        double gen_ms     = std::chrono::duration<double, std::milli>(t_end - t_prefilled).count();
+        fprintf(stderr, "[hl_complete] ctx=%u fa=%d prompt=%d tok prefill=%.0fms (%.0f t/s) | gen=%d tok %.0fms (%.1f t/s)\n",
+                cp.n_ctx, flash_attn, n_prompt, prefill_ms, prefill_ms > 0 ? n_prompt * 1000.0 / prefill_ms : 0.0,
+                n_gen, gen_ms, gen_ms > 0 ? n_gen * 1000.0 / gen_ms : 0.0);
+        fflush(stderr);
     }
 
     llama_sampler_free(smpl);
