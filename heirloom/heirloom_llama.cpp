@@ -70,16 +70,27 @@ int hl_complete(hl_model* m, const char* prompt, int n_predict,
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
     std::string result;
-    llama_batch batch = llama_batch_get_one(toks.data(), (int32_t)toks.size());
-    llama_token next = 0; // stable address across iterations for the single-token batch
     char piece[512];
-    for (int i = 0; i < n_predict; ++i) {
-        if (llama_decode(ctx, batch) != 0) break;
+
+    // Prefill the prompt in n_batch-sized chunks: a single llama_decode is capped at n_batch (logical), so a
+    // long prompt (e.g. the agent's grammar system prompt) must be fed in pieces rather than one batch.
+    bool prefilled = true;
+    for (int32_t i = 0; i < n_prompt; i += (int32_t)cp.n_batch) {
+        int32_t n = (int32_t)cp.n_batch;
+        if (i + n > n_prompt) n = n_prompt - i;
+        llama_batch chunk = llama_batch_get_one(toks.data() + i, n);
+        if (llama_decode(ctx, chunk) != 0) { prefilled = false; break; }
+    }
+
+    // Generate from the last prompt position (logits of the final prefill token).
+    llama_token next = 0; // stable address across iterations for the single-token batch
+    for (int i = 0; prefilled && i < n_predict; ++i) {
         next = llama_sampler_sample(smpl, ctx, -1);
         if (llama_vocab_is_eog(vocab, next)) break;
         int np = llama_token_to_piece(vocab, next, piece, (int32_t)sizeof(piece), 0, true);
         if (np > 0) result.append(piece, (size_t)np);
-        batch = llama_batch_get_one(&next, 1);
+        llama_batch gen = llama_batch_get_one(&next, 1);
+        if (llama_decode(ctx, gen) != 0) break;
     }
 
     llama_sampler_free(smpl);
