@@ -49,6 +49,20 @@ HL_API int hl_caption(hl_model* m, const char* mmproj_path, const char* image_pa
                       int n_predict, int n_ctx, int n_ubatch, int image_min_tokens,
                       char* out, int out_cap);
 
+// Multimodal completion over a PRE-TEMPLATED prompt (the agent's tool-calling path). Unlike hl_caption, the
+// caller owns the full chat template (system + <tools> + history turns) and embeds mtmd's image marker
+// ("<__media__>", see mtmd_default_marker()) in the last user turn; mtmd swaps the marker for the image
+// (passed as in-memory JPEG/PNG bytes — no temp file). Then it generates with the same caller-tuned sampler +
+// cooperative cancel as hl_complete, so the model can answer in plain text OR emit a <tool_call>. flash_attn
+// forced off (sm_120a). image_min_tokens<=0 = model default. Returns bytes written, or -1.
+HL_API int hl_complete_image(hl_model* m, const char* mmproj_path,
+                             const unsigned char* image_buf, int image_len,
+                             const char* prompt, int n_predict,
+                             int n_ctx, int n_ubatch, int image_min_tokens,
+                             float temp, float top_p, int top_k, float repeat_penalty,
+                             const int* cancel,
+                             char* out, int out_cap);
+
 #ifdef __cplusplus
 }
 #endif
