@@ -308,4 +308,81 @@ int hl_complete_image(hl_model* m, const char* mmproj_path,
     return n;
 }
 
+// Shared: build an embeddings context (embeddings on, last-token pooling — Qwen3-VL-Embedding).
+static llama_context* hl_embed_ctx(hl_model* m, int n_ctx, int n_ubatch) {
+    llama_context_params cp = llama_context_default_params();
+    cp.n_ctx            = (uint32_t)(n_ctx   > 0 ? n_ctx   : 4096);
+    cp.n_ubatch         = (uint32_t)(n_ubatch > 0 ? n_ubatch : 2048);
+    cp.n_batch          = cp.n_ubatch < 2048 ? 2048 : cp.n_ubatch;
+    cp.flash_attn_type  = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    cp.embeddings       = true;
+    cp.pooling_type     = LLAMA_POOLING_TYPE_LAST;
+    return llama_init_from_model(m->model, cp);
+}
+
+static int hl_embed_finish(llama_context* ctx, hl_model* m, float* out, int out_cap) {
+    const float* emb = llama_get_embeddings_seq(ctx, 0);
+    if (!emb) emb = llama_get_embeddings(ctx);
+    if (!emb) return -1;
+    int n_embd = llama_model_n_embd(m->model);
+    int n = n_embd < out_cap ? n_embd : out_cap;
+    memcpy(out, emb, (size_t)n * sizeof(float));
+    return n_embd;
+}
+
+int hl_embed_image(hl_model* m, const char* mmproj_path,
+                   const unsigned char* image_buf, int image_len,
+                   int n_ctx, int n_ubatch, int image_min_tokens,
+                   float* out, int out_cap) {
+    if (!m || !m->model || !mmproj_path || !image_buf || image_len <= 0 || !out || out_cap <= 0) return -1;
+
+    mtmd_context_params mp = mtmd_context_params_default();
+    mp.use_gpu = true; mp.print_timings = false; mp.warmup = false;
+    mp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    if (image_min_tokens > 0) mp.image_min_tokens = image_min_tokens;
+    mtmd_context* mctx = mtmd_init_from_file(mmproj_path, m->model, mp);
+    if (!mctx) return -1;
+
+    llama_context* ctx = hl_embed_ctx(m, n_ctx, n_ubatch);
+    if (!ctx) { mtmd_free(mctx); return -1; }
+
+    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false);
+    if (!bmp) { llama_free(ctx); mtmd_free(mctx); return -1; }
+    std::string content = std::string(mtmd_default_marker());   // document = the image
+    mtmd_input_text it{ content.c_str(), true, true };
+    mtmd_input_chunks* chunks = mtmd_input_chunks_init();
+    const mtmd_bitmap* bmps[1] = { bmp };
+    int tok = mtmd_tokenize(mctx, chunks, &it, bmps, 1);
+    mtmd_bitmap_free(bmp);
+    if (tok != 0) { mtmd_input_chunks_free(chunks); llama_free(ctx); mtmd_free(mctx); return -1; }
+    llama_pos n_past = 0;
+    int ev = mtmd_helper_eval_chunks(mctx, ctx, chunks, /*n_past*/0, /*seq_id*/0, /*n_batch*/(int32_t)2048, /*logits_last*/true, &n_past);
+    mtmd_input_chunks_free(chunks);
+    if (ev != 0) { llama_free(ctx); mtmd_free(mctx); return -1; }
+
+    int rc = hl_embed_finish(ctx, m, out, out_cap);
+    llama_free(ctx); mtmd_free(mctx);
+    return rc;
+}
+
+int hl_embed_text(hl_model* m, const char* prompt, int n_ctx, int n_ubatch, float* out, int out_cap) {
+    if (!m || !m->model || !prompt || !out || out_cap <= 0) return -1;
+    const llama_vocab* vocab = llama_model_get_vocab(m->model);
+
+    llama_context* ctx = hl_embed_ctx(m, n_ctx, n_ubatch);
+    if (!ctx) return -1;
+
+    const int32_t len = (int32_t)strlen(prompt);
+    int32_t n_prompt = -llama_tokenize(vocab, prompt, len, nullptr, 0, true, true);
+    if (n_prompt <= 0) { llama_free(ctx); return -1; }
+    std::vector<llama_token> toks((size_t)n_prompt);
+    if (llama_tokenize(vocab, prompt, len, toks.data(), n_prompt, true, true) < 0) { llama_free(ctx); return -1; }
+    llama_batch b = llama_batch_get_one(toks.data(), n_prompt);
+    if (llama_decode(ctx, b) != 0) { llama_free(ctx); return -1; }
+
+    int rc = hl_embed_finish(ctx, m, out, out_cap);
+    llama_free(ctx);
+    return rc;
+}
+
 } // extern "C"

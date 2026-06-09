@@ -63,6 +63,18 @@ HL_API int hl_complete_image(hl_model* m, const char* mmproj_path,
                              const int* cancel,
                              char* out, int out_cap);
 
+// Multimodal EMBEDDING: encode an image (in-memory bytes) via the mmproj + LM into a single pooled vector
+// (Qwen3-VL-Embedding, last-token pooling). Writes up to out_cap floats; returns the embedding dim (n_embd),
+// or -1. image_min_tokens<=0 = model default.
+HL_API int hl_embed_image(hl_model* m, const char* mmproj_path,
+                          const unsigned char* image_buf, int image_len,
+                          int n_ctx, int n_ubatch, int image_min_tokens,
+                          float* out, int out_cap);
+
+// Text EMBEDDING into the same joint space (queries). `prompt` is the raw text (caller adds any instruction).
+// Writes up to out_cap floats; returns n_embd, or -1.
+HL_API int hl_embed_text(hl_model* m, const char* prompt, int n_ctx, int n_ubatch, float* out, int out_cap);
+
 #ifdef __cplusplus
 }
 #endif
