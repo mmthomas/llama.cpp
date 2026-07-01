@@ -1494,14 +1494,15 @@ struct clip_model_loader {
                 case PROJECTOR_TYPE_GLM4V:
                     {
                         hparams.rope_theta = 10000.0f;
-                        hparams.n_merge = 2; // default value for GLM4-V
-                        // Match HF Glm46VImageProcessor (zai-org/GLM-OCR): PIL bicubic, direct resize (no letterbox
-                        // pad), and the processor's size bounds min_pixels=12544 / max_pixels=9,633,792 (= 16 / 12288
-                        // merged tokens × 14·14·2·2). The GGUF's baked KEY_IMAGE_MAX_PIXELS is 3× too small.
+                        hparams.n_merge = 2;
+                        // Glm4vImageProcessor resizes with PIL bicubic and no letterbox padding
                         hparams.image_resize_algo = RESIZE_ALGO_BICUBIC_PILLOW;
                         hparams.image_resize_pad = PAD_NONE;
                         get_u32(KEY_SPATIAL_MERGE_SIZE, hparams.n_merge, false);
+                        // default bounds for GGUFs that carry no pixel range in metadata
                         hparams.set_limit_image_tokens(16, 12288);
+                        get_u32(KEY_IMAGE_MIN_PIXELS, hparams.image_min_pixels, false);
+                        get_u32(KEY_IMAGE_MAX_PIXELS, hparams.image_max_pixels, false);
                         hparams.set_warmup_n_tokens(46*46); // avoid OOM on warmup
                     } break;
                 case PROJECTOR_TYPE_LLAMA4:
