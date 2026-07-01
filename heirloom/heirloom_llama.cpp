@@ -318,16 +318,22 @@ int hl_ocr(hl_model* m, const char* mmproj_path,
     if (!m || !m->model || !mmproj_path || !image_buf || image_len <= 0 || !user_prompt || !out || out_cap <= 0) return -1;
     const llama_vocab* vocab = llama_model_get_vocab(m->model);
 
-    // multimodal context (loads the mmproj/clip). flash_attn off on sm_120a, as in hl_caption/hl_complete_image.
+    // multimodal context (loads the mmproj/clip). The GLM4V vision encoder runs full O(n^2) attention over the
+    // patch grid (HF parity: Glm4vVisionModel has no windowing); at OCR resolution a 8+ MP image is a ~42k-patch
+    // grid whose fp32 KQ score matrix reserves ~85 GiB and OOMs a 32 GiB card. Flash attention (ggml_flash_attn_ext,
+    // matching HF's SDPA path) never materializes that matrix and bounds the vision buffer to a few GiB. warmup is
+    // off here, so AUTO would never resolve to ENABLED (the resolve runs only under mtmd warmup) — force ENABLED.
     mtmd_context_params mp = mtmd_context_params_default();
     mp.use_gpu          = true;
     mp.print_timings    = false;
     mp.warmup           = false;
-    mp.flash_attn_type  = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    mp.flash_attn_type  = LLAMA_FLASH_ATTN_TYPE_ENABLED;
     if (image_min_tokens > 0) mp.image_min_tokens = image_min_tokens;
     mtmd_context* mctx = mtmd_init_from_file(mmproj_path, m->model, mp);
     if (!mctx) return -1;
 
+    // The text decode context keeps flash_attn off (the separate sm_120a decode-FA concern); only the vision
+    // encoder above needs it, and that is where the O(n^2) blow-up lives.
     llama_context_params cp = llama_context_default_params();
     cp.n_ctx           = (uint32_t)(n_ctx   > 0 ? n_ctx   : 8192);
     cp.n_ubatch        = (uint32_t)(n_ubatch > 0 ? n_ubatch : 2048);
@@ -366,16 +372,22 @@ int hl_ocr(hl_model* m, const char* mmproj_path,
     if (ev != 0) { llama_free(ctx); mtmd_free(mctx); return -1; }
     const auto t_prefilled = std::chrono::steady_clock::now();
 
-    // Sampler chain: caller-tuned (penalty -> top-k -> top-p -> temp -> dist), identical to hl_complete_image.
+    // Sampler chain. OCR default is GREEDY (argmax): GLM-OCR ships do_sample=false, and greedy is the deterministic
+    // transcription the qualification study ran; the entropy post-filter backstops the dense-grid loop greedy risks
+    // (Holtzman). temp<=0 selects greedy; temp>0 samples (penalty -> top-k -> top-p -> temp -> dist) for A/B tests.
     llama_sampler_chain_params sp = llama_sampler_chain_default_params();
     llama_sampler* smpl = llama_sampler_chain_init(sp);
-    if (repeat_penalty > 1.0f) {
-        llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, repeat_penalty, 0.0f, 0.0f));
+    if (temp <= 0.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
+    } else {
+        if (repeat_penalty > 1.0f) {
+            llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, repeat_penalty, 0.0f, 0.0f));
+        }
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k > 0 ? top_k : 40));
+        llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p > 0.0f ? top_p : 0.95f, 1));
+        llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp));
+        llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
     }
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k > 0 ? top_k : 40));
-    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p > 0.0f ? top_p : 0.95f, 1));
-    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp > 0.0f ? temp : 0.7f));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
     std::string result;
     llama_token next = 0;
