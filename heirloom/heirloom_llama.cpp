@@ -164,7 +164,7 @@ int hl_caption(hl_model* m, const char* mmproj_path, const char* image_path, con
     if (fn <= 0) { llama_free(ctx); mtmd_free(mctx); return -1; }
     std::string full(fbuf.data(), (size_t)fn);
 
-    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_file(mctx, image_path, false);
+    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_file(mctx, image_path, false).bitmap;
     if (!bmp) { llama_free(ctx); mtmd_free(mctx); return -1; }
 
     mtmd_input_text it{ full.c_str(), true, true };
@@ -242,7 +242,7 @@ int hl_complete_image(hl_model* m, const char* mmproj_path,
     // The prompt is ALREADY fully templated (the agent's <|im_start|> system + <tools> + turns) with the media
     // marker embedded in the last user turn; mtmd_tokenize swaps the marker for the in-memory image. add_special
     // / parse_special = true, matching hl_complete's verbatim tokenize.
-    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false);
+    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false).bitmap;
     if (!bmp) { llama_free(ctx); mtmd_free(mctx); return -1; }
 
     mtmd_input_text it{ prompt, true, true };
@@ -354,7 +354,7 @@ int hl_ocr(hl_model* m, const char* mmproj_path,
     if (fn <= 0) { llama_free(ctx); mtmd_free(mctx); return -1; }
     std::string full(fbuf.data(), (size_t)fn);
 
-    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false);
+    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false).bitmap;
     if (!bmp) { llama_free(ctx); mtmd_free(mctx); return -1; }
 
     mtmd_input_text it{ full.c_str(), true, true };
@@ -463,7 +463,7 @@ int hl_embed_image(hl_model* m, const char* mmproj_path,
     llama_context* ctx = hl_embed_ctx(m, n_ctx, n_ubatch);
     if (!ctx) { mtmd_free(mctx); return -1; }
 
-    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false);
+    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false).bitmap;
     if (!bmp) { llama_free(ctx); mtmd_free(mctx); return -1; }
     std::string content = std::string(mtmd_default_marker());   // document = the image
     mtmd_input_text it{ content.c_str(), true, true };
