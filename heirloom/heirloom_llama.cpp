@@ -308,6 +308,111 @@ int hl_complete_image(hl_model* m, const char* mmproj_path,
     return n;
 }
 
+int hl_ocr(hl_model* m, const char* mmproj_path,
+           const unsigned char* image_buf, int image_len,
+           const char* user_prompt, int n_predict,
+           int n_ctx, int n_ubatch, int image_min_tokens,
+           float temp, float top_p, int top_k, float repeat_penalty,
+           const int* cancel,
+           char* out, int out_cap) {
+    if (!m || !m->model || !mmproj_path || !image_buf || image_len <= 0 || !user_prompt || !out || out_cap <= 0) return -1;
+    const llama_vocab* vocab = llama_model_get_vocab(m->model);
+
+    // multimodal context (loads the mmproj/clip). flash_attn off on sm_120a, as in hl_caption/hl_complete_image.
+    mtmd_context_params mp = mtmd_context_params_default();
+    mp.use_gpu          = true;
+    mp.print_timings    = false;
+    mp.warmup           = false;
+    mp.flash_attn_type  = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    if (image_min_tokens > 0) mp.image_min_tokens = image_min_tokens;
+    mtmd_context* mctx = mtmd_init_from_file(mmproj_path, m->model, mp);
+    if (!mctx) return -1;
+
+    llama_context_params cp = llama_context_default_params();
+    cp.n_ctx           = (uint32_t)(n_ctx   > 0 ? n_ctx   : 8192);
+    cp.n_ubatch        = (uint32_t)(n_ubatch > 0 ? n_ubatch : 2048);
+    cp.n_batch         = cp.n_ubatch < 2048 ? 2048 : cp.n_ubatch; // image tokens must fit one ubatch
+    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    llama_context* ctx = llama_init_from_model(m->model, cp);
+    if (!ctx) { mtmd_free(mctx); return -1; }
+
+    // Model-templated prompt: user content = media-marker + the OCR instruction; the model's own chat template
+    // (llama_chat_apply_template) wraps it, exactly as hl_caption does. mtmd_tokenize swaps the marker for the
+    // in-memory image bytes (hl_complete_image's path — no temp file).
+    std::string content = std::string(mtmd_default_marker()) + "\n" + user_prompt;
+    llama_chat_message msg{ "user", content.c_str() };
+    const char* tmpl = llama_model_chat_template(m->model, nullptr);
+    std::vector<char> fbuf(content.size() * 2 + 1024);
+    int fn = llama_chat_apply_template(tmpl, &msg, 1, true, fbuf.data(), (int32_t)fbuf.size());
+    if (fn > (int)fbuf.size()) { fbuf.resize((size_t)fn + 1); fn = llama_chat_apply_template(tmpl, &msg, 1, true, fbuf.data(), (int32_t)fbuf.size()); }
+    if (fn <= 0) { llama_free(ctx); mtmd_free(mctx); return -1; }
+    std::string full(fbuf.data(), (size_t)fn);
+
+    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false);
+    if (!bmp) { llama_free(ctx); mtmd_free(mctx); return -1; }
+
+    mtmd_input_text it{ full.c_str(), true, true };
+    mtmd_input_chunks* chunks = mtmd_input_chunks_init();
+    const mtmd_bitmap* bmps[1] = { bmp };
+    int tok = mtmd_tokenize(mctx, chunks, &it, bmps, 1);
+    mtmd_bitmap_free(bmp);
+    if (tok != 0) { mtmd_input_chunks_free(chunks); llama_free(ctx); mtmd_free(mctx); return -1; }
+
+    const auto t_start = std::chrono::steady_clock::now();
+    llama_pos new_n_past = 0;
+    int ev = mtmd_helper_eval_chunks(mctx, ctx, chunks, /*n_past*/0, /*seq_id*/0,
+                                     /*n_batch*/(int32_t)cp.n_batch, /*logits_last*/true, &new_n_past);
+    mtmd_input_chunks_free(chunks);
+    if (ev != 0) { llama_free(ctx); mtmd_free(mctx); return -1; }
+    const auto t_prefilled = std::chrono::steady_clock::now();
+
+    // Sampler chain: caller-tuned (penalty -> top-k -> top-p -> temp -> dist), identical to hl_complete_image.
+    llama_sampler_chain_params sp = llama_sampler_chain_default_params();
+    llama_sampler* smpl = llama_sampler_chain_init(sp);
+    if (repeat_penalty > 1.0f) {
+        llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, repeat_penalty, 0.0f, 0.0f));
+    }
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k > 0 ? top_k : 40));
+    llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p > 0.0f ? top_p : 0.95f, 1));
+    llama_sampler_chain_add(smpl, llama_sampler_init_temp(temp > 0.0f ? temp : 0.7f));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+
+    std::string result;
+    llama_token next = 0;
+    char piece[512];
+    int n_gen = 0;
+    for (int i = 0; i < n_predict; ++i) {
+        if (cancel && *(const volatile int*)cancel) break;   // cooperative cancel (user Stop / GPU reclaim)
+        next = llama_sampler_sample(smpl, ctx, -1);
+        if (llama_vocab_is_eog(vocab, next)) break;
+        int np = llama_token_to_piece(vocab, next, piece, (int32_t)sizeof(piece), 0, true);
+        if (np > 0) result.append(piece, (size_t)np);
+        ++n_gen;
+        llama_batch b = llama_batch_get_one(&next, 1);
+        if (llama_decode(ctx, b) != 0) break;
+    }
+
+    {
+        const auto t_end = std::chrono::steady_clock::now();
+        double prefill_ms = std::chrono::duration<double, std::milli>(t_prefilled - t_start).count();
+        double gen_ms     = std::chrono::duration<double, std::milli>(t_end - t_prefilled).count();
+        fprintf(stderr, "[hl_ocr] ctx=%u img=%dB n_past=%d prefill=%.0fms | gen=%d tok %.0fms (%.1f t/s)\n",
+                cp.n_ctx, image_len, (int)new_n_past, prefill_ms,
+                n_gen, gen_ms, gen_ms > 0 ? n_gen * 1000.0 / gen_ms : 0.0);
+        fflush(stderr);
+    }
+
+    llama_sampler_free(smpl);
+    llama_free(ctx);
+    mtmd_free(mctx);
+
+    int n = (int)result.size();
+    if (n > out_cap - 1) n = out_cap - 1;
+    memcpy(out, result.data(), (size_t)n);
+    out[n] = '\0';
+    return n;
+}
+
 // Shared: build an embeddings context (embeddings on, last-token pooling — Qwen3-VL-Embedding).
 static llama_context* hl_embed_ctx(hl_model* m, int n_ctx, int n_ubatch) {
     llama_context_params cp = llama_context_default_params();

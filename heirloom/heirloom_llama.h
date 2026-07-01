@@ -63,6 +63,19 @@ HL_API int hl_complete_image(hl_model* m, const char* mmproj_path,
                              const int* cancel,
                              char* out, int out_cap);
 
+// OCR: transcribe text from an image (in-memory bytes) via an mmproj. Like hl_complete_image it takes bytes +
+// the caller's sampler + cooperative cancel; like hl_caption it applies the MODEL's own chat template around
+// (media-marker + user_prompt) — so the caller passes only the OCR instruction (e.g. "Text Recognition:") and the
+// image, never template scaffolding. Its own purpose-built path for the OCR sweep (no overload of the others).
+// flash_attn forced off (sm_120a). image_min_tokens<=0 = model default. Returns bytes written, or -1.
+HL_API int hl_ocr(hl_model* m, const char* mmproj_path,
+                  const unsigned char* image_buf, int image_len,
+                  const char* user_prompt, int n_predict,
+                  int n_ctx, int n_ubatch, int image_min_tokens,
+                  float temp, float top_p, int top_k, float repeat_penalty,
+                  const int* cancel,
+                  char* out, int out_cap);
+
 // Multimodal EMBEDDING: encode an image (in-memory bytes) via the mmproj + LM into a single pooled vector
 // (Qwen3-VL-Embedding, last-token pooling). Writes up to out_cap floats; returns the embedding dim (n_embd),
 // or -1. image_min_tokens<=0 = model default.
