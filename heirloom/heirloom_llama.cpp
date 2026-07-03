@@ -12,12 +12,32 @@
 
 struct hl_model { llama_model* model; };
 
+// Warning-threshold log filter for every native logger (llama, ggml/CUDA, mtmd/clip). The default callbacks
+// print all levels, and clip's model loader emits ~1,100 DEBUG tensor lines per mtmd context — at one context
+// per hl_ocr call that is ~30 KB of stderr per image. CONT lines inherit the level of the message they
+// continue, so a kept warning prints whole and a dropped INFO doesn't leak its tail.
+static void hl_log_filter(ggml_log_level level, const char* text, void* /*user*/) {
+    static ggml_log_level last = GGML_LOG_LEVEL_INFO;
+    if (level != GGML_LOG_LEVEL_CONT) last = level;
+    if (last == GGML_LOG_LEVEL_WARN || last == GGML_LOG_LEVEL_ERROR) {
+        fputs(text, stderr);
+        fflush(stderr);
+    }
+}
+
+static void hl_install_log_filter(void) {
+    llama_log_set(hl_log_filter, nullptr);
+    ggml_log_set(hl_log_filter, nullptr);
+    mtmd_log_set(hl_log_filter, nullptr);
+}
+
 extern "C" {
 
-void hl_backend_init(void) { llama_backend_init(); }
+void hl_backend_init(void) { hl_install_log_filter(); llama_backend_init(); }
 void hl_backend_free(void) { llama_backend_free(); }
 
 hl_model* hl_load(const char* model_path, int n_gpu_layers) {
+    hl_install_log_filter();   // idempotent; covers callers that skip hl_backend_init
     llama_model_params mp = llama_model_default_params();
     mp.n_gpu_layers = n_gpu_layers;
     llama_model* model = llama_model_load_from_file(model_path, mp);
