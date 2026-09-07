@@ -242,6 +242,15 @@ class Glm4VVisionModel(Qwen3VLVisionModel):
         rms_norm_eps = self.hparams_vision.get("rms_norm_eps", 1e-5)
         self.gguf_writer.add_vision_attention_layernorm_eps(rms_norm_eps)
 
+        size = self.preprocessor_config.get("size", {})
+        min_pixels = self.preprocessor_config.get("min_pixels", size.get("shortest_edge"))
+        max_pixels = self.preprocessor_config.get("max_pixels", size.get("longest_edge"))
+        if min_pixels is None or max_pixels is None:
+            raise KeyError("GLM4V preprocessor_config is missing image pixel bounds "
+                           "(min_pixels/max_pixels or size.shortest_edge/longest_edge)")
+        self.gguf_writer.add_vision_min_pixels(int(min_pixels))
+        self.gguf_writer.add_vision_max_pixels(int(max_pixels))
+
     def modify_tensors(self, data_torch: Tensor, name: str, bid: int | None) -> Iterable[tuple[str, Tensor]]:
         if name.startswith("visual.merger."):
             yield from ModelBase.modify_tensors(self, data_torch, name, bid)
