@@ -1,8 +1,8 @@
-# Heirloom native runtime refresh candidate
+# Heirloom native runtime
 
-This private-fork candidate is pinned to reviewed upstream commit `73ab7599b553c03f6f5d2db24a18ad76f2eb36a3` from `https://github.com/ggml-org/llama.cpp.git`, not to a moving `master`.
+The maintained branch is `heirloom` in `https://github.com/mmthomas/llama.cpp.git`. Its native source is pinned to reviewed upstream commit `73ab7599b553c03f6f5d2db24a18ad76f2eb36a3`, not to a moving `master`. Qualified source commit `1fc214646504b2f0bf6236ac80ae003bf4fcc8e0` is integrated by merge `cb51dfa2efed58fa22fb1f5420b25f771d686982`, whose tree is identical to the qualified commit.
 
-**The vision-FA variant is deployed as an immutable bundle; the daemon is paused.** The source worktree is `C:\dev\llama-refresh-20260907`, branch `refresh-20260907`. Building this worktree does not mutate deployed binaries.
+**The vision-FA variant is deployed as an immutable bundle.** The daemon's current state is available through `daemon-ctl status`; a source build does not mutate deployed binaries. Build from a clean checkout of `heirloom`. The temporary qualification worktrees and their build outputs are disposable; their source commits remain in Git.
 
 ## Patch boundary
 
@@ -26,13 +26,13 @@ There is no local ggml/CUDA backend policy delta. The build requests `CMAKE_CUDA
 
 Use the existing VS 2026 BuildTools environment at `C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\VC\Auxiliary\Build\vcvars64.bat`, portable CMake at `C:\dev\tools\cmake\bin`, Ninja at `C:\dev\tools\ninja`, and CUDA 13.3 at `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3`.
 
-From PowerShell:
+From PowerShell in the checkout root:
 
 ```powershell
-New-Item -ItemType Directory -Force C:\dev\llama-refresh-20260907\build | Out-Null
-& $env:ComSpec /d /c 'call "C:\dev\llama-refresh-20260907\heirloom-configure-cuda.bat" > "C:\dev\llama-refresh-20260907\build\configure.log" 2>&1'
+New-Item -ItemType Directory -Force .\build | Out-Null
+& $env:ComSpec /d /c 'call ".\heirloom-configure-cuda.bat" > ".\build\configure.log" 2>&1'
 if ($LASTEXITCODE -ne 0) { throw "Candidate configuration failed; see build\configure.log" }
-& $env:ComSpec /d /c 'call "C:\dev\llama-refresh-20260907\heirloom-build-cuda.bat" > "C:\dev\llama-refresh-20260907\build\build.log" 2>&1'
+& $env:ComSpec /d /c 'call ".\heirloom-build-cuda.bat" > ".\build\build.log" 2>&1'
 if ($LASTEXITCODE -ne 0) { throw "Candidate build failed; see build\build.log" }
 ```
 
@@ -44,11 +44,11 @@ The build command is `cmake --build <candidate>\build --config Release --target 
 
 ### Recorded build limitations
 
-Files named `*-sm120-custom-mma.*` under `build` are diagnostic provenance from the superseded custom-policy build, not current qualification evidence. Current logs and artifact hashes use the unsuffixed filenames.
+Files named `*-sm120-custom-mma.*` from qualification are diagnostic provenance from the superseded custom-policy build, not current qualification evidence. Accepted logs and artifact hashes use the unsuffixed filenames.
 
 This host selects the AVX512 CPU backend. OpenSSL was not found, so the CLIs/server have no HTTPS support. Optional ccache/NCCL were absent; VS environment setup reported missing `vswhere.exe` but initialized MSVC 19.51 successfully. Upstream compiler warnings remain in the build log; they were not suppressed or patched as part of this refresh.
 
-Upstream's UI provisioning could not download the `b10840` bundle and fell back to `latest`, whose embedded `build.json` identifies `b10839`. The downloaded `build\tools\ui\dist.tar.gz` has SHA-256 `f2bff086773a9de542987e75b95210e631a959876daf60adfa78797cb45f9099`. Native source remains pinned, but that UI fallback is not source-pinned. Preserve the downloaded bundle and `build\artifact-sha256.csv` for this candidate's provenance.
+Upstream's UI provisioning could not download the `b10840` bundle and fell back to `latest`, whose embedded `build.json` identifies `b10839`. The qualification download had SHA-256 `f2bff086773a9de542987e75b95210e631a959876daf60adfa78797cb45f9099`. Native source remains pinned, but that UI fallback is not source-pinned. The deployed immutable bundle retains the qualified CLI binaries; the temporary UI download is not retained.
 
 ## Vision-FA qualification and activation: 2026-09-07
 
@@ -58,15 +58,15 @@ An 80-image native lifecycle replay used the approved album prompt and crossed t
 
 The user reviewed the 30-photo vision-FA comparison and approved caption quality and the paused rollout. No numerical factual-error score or byte-identical output claim is made. A top-k=1 diagnostic on a portrait and two square scans still produced wording differences; image encoding on the squares fell from about 34 seconds to 1.2 seconds. Production keeps its original sampling settings.
 
-The indexer uses `caption@grounded-6` and launched with `--paused`, without acquiring a GPU job. A separate default-runtime probe from the deployed application resolved this bundle and its exact fingerprint. The old executable/settings snapshot is under `C:\dev\heirloom-run\rollback\caption-20260907`; the old runtime at `C:\dev\llama-production\build\bin` remains intact.
+The indexer uses `caption@grounded-6` and initially launched with `--paused`, without acquiring a GPU job. A separate default-runtime probe from the deployed application resolved this bundle and its exact fingerprint. Settings and deployment provenance remain under `C:\dev\heirloom-run\rollback\caption-20260907`; old indexer executables and temporary native build trees are not retained.
 
-## Retained no-vision-FA control
+## No-vision-FA control provenance
 
 The parent's later production-lifecycle replay of the no-vision-FA candidate observed about 7.5 GiB of WDDM shared GPU memory on 2048-square scans before the 75-item recycle. This prompted the separately approved vision-FA comparison; it is not evidence that the new variant resolves the memory behavior.
 
-Before changing the two encoder settings, all candidate DLLs/EXEs and their original `artifact-sha256.csv` were preserved byte-for-byte in `build\qualified-no-vision-fa`. That directory also contains `source-residual.patch` for the historical control. The copied manifest retains its original paths; use each filename under the snapshot directory when checking its saved binaries. The directory name does not imply that the control passed the deployment memory or factual-caption gates.
+The historical control's `artifact-sha256.csv` and `source-residual.patch` are retained in `C:\Users\media\.copilot\session-state\037914b8-45f0-4b10-8148-6916f1895bc0\files\native-merge-cleanup-20260908\no-vision-fa`. The manifest retains its original paths as provenance, not as locations of retained binaries. This control did not pass the deployment memory gate.
 
-The source worktree's binaries and hashes are in `build\bin` and `build\artifact-sha256.csv`. The deployed copy is the explicit immutable bundle above; future builds require their own qualification and bundle selection.
+The accepted build's artifact hashes, configure/build logs, CUDA architecture report and shim export report are retained in the parent `native-merge-cleanup-20260908` directory. The deployed binaries are in the explicit immutable bundle above; future builds require their own qualification and bundle selection.
 
 ## Historical no-vision-FA control evidence: 2026-09-07
 
@@ -91,6 +91,6 @@ Private caption rows and images remain outside the repository at `C:\Users\media
 
 Future activation requires factual caption review, a same-lifecycle memory observation, and a separate deployment decision. Preserve decoder/OCR/embedding policies, sampling, resolution, weights, and lifecycle profile unless explicitly qualifying another change. Keep prior bundles intact for rollback and preserve the daemon's operator-selected pause state.
 
-For the parent probe process, put this candidate's `build\bin` and `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\bin\x64` before other runtime directories on PATH. CUDA 13.3's vendor DLLs, including `cublas64_13.dll` and `cublasLt64_13.dll`, live in `bin\x64`, not the toolkit's top-level `bin`. They and the installed MSVC/OpenMP runtime are external prerequisites, not copied deployment files.
+For a worktree build probe, put that checkout's `build\bin` and `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3\bin\x64` before other runtime directories on PATH. CUDA 13.3's vendor DLLs, including `cublas64_13.dll` and `cublasLt64_13.dll`, live in `bin\x64`, not the toolkit's top-level `bin`. The deployed immutable bundle includes those cuBLAS DLLs; the installed MSVC/OpenMP runtime remains a host prerequisite.
 
 Historical no-FA results do not qualify future runtime variants. The activation above is specific to the recorded fingerprint, approved prompt, and measured lifecycle.
