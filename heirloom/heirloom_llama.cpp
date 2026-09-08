@@ -90,7 +90,8 @@ int hl_complete(hl_model* m, const char* prompt, int n_predict,
     llama_sampler_chain_params sp = llama_sampler_chain_default_params();
     llama_sampler* smpl = llama_sampler_chain_init(sp);
     if (repeat_penalty > 1.0f) {
-        llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, repeat_penalty, 0.0f, 0.0f));
+        llama_sampler_chain_add(smpl,
+            llama_sampler_init_penalties(llama_vocab_n_tokens(vocab), 64, repeat_penalty, 0.0f, 0.0f));
     }
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k > 0 ? top_k : 40));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p > 0.0f ? top_p : 0.95f, 1));
@@ -156,12 +157,12 @@ int hl_caption(hl_model* m, const char* mmproj_path, const char* image_path, con
     if (!m || !m->model || !mmproj_path || !image_path || !out || out_cap <= 0) return -1;
     const llama_vocab* vocab = llama_model_get_vocab(m->model);
 
-    // multimodal context (loads the mmproj/clip + audio projectors).
+    // Force vision FA with warmup disabled; decoder FA stays disabled.
     mtmd_context_params mp = mtmd_context_params_default();
     mp.use_gpu          = true;
     mp.print_timings    = false;
     mp.warmup           = false;
-    mp.flash_attn_type  = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    mp.flash_attn_type  = LLAMA_FLASH_ATTN_TYPE_ENABLED;
     if (image_min_tokens > 0) mp.image_min_tokens = image_min_tokens;
     mtmd_context* mctx = mtmd_init_from_file(mmproj_path, m->model, mp);
     if (!mctx) return -1;
@@ -184,14 +185,17 @@ int hl_caption(hl_model* m, const char* mmproj_path, const char* image_path, con
     if (fn <= 0) { llama_free(ctx); mtmd_free(mctx); return -1; }
     std::string full(fbuf.data(), (size_t)fn);
 
-    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_file(mctx, image_path, false).bitmap;
+    auto media = mtmd_helper_bitmap_init_from_file(mctx, image_path, false, mtmd_helper_init_opt_default());
+    mtmd::bitmap_ptr bmp(media.bitmap);
+    mtmd_helper::video_ptr video(media.video_ctx);
     if (!bmp) { llama_free(ctx); mtmd_free(mctx); return -1; }
 
-    mtmd_input_text it{ full.c_str(), true, true };
+    mtmd_input_text it{ full.c_str(), full.size(), true, true };
     mtmd_input_chunks* chunks = mtmd_input_chunks_init();
-    const mtmd_bitmap* bmps[1] = { bmp };
+    const mtmd_bitmap* bmps[1] = { bmp.get() };
     int tok = mtmd_tokenize(mctx, chunks, &it, bmps, 1);
-    mtmd_bitmap_free(bmp);
+    bmp.reset();
+    video.reset();
     if (tok != 0) { mtmd_input_chunks_free(chunks); llama_free(ctx); mtmd_free(mctx); return -1; }
 
     llama_pos new_n_past = 0;
@@ -241,12 +245,12 @@ int hl_complete_image(hl_model* m, const char* mmproj_path,
     if (!m || !m->model || !mmproj_path || !image_buf || image_len <= 0 || !prompt || !out || out_cap <= 0) return -1;
     const llama_vocab* vocab = llama_model_get_vocab(m->model);
 
-    // multimodal context (loads the mmproj/clip). flash_attn off on sm_120a (#21159), as in hl_caption.
+    // Match hl_caption: vision encoder FA on, decoder FA off.
     mtmd_context_params mp = mtmd_context_params_default();
     mp.use_gpu          = true;
     mp.print_timings    = false;
     mp.warmup           = false;
-    mp.flash_attn_type  = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    mp.flash_attn_type  = LLAMA_FLASH_ATTN_TYPE_ENABLED;
     if (image_min_tokens > 0) mp.image_min_tokens = image_min_tokens;
     mtmd_context* mctx = mtmd_init_from_file(mmproj_path, m->model, mp);
     if (!mctx) return -1;
@@ -262,14 +266,17 @@ int hl_complete_image(hl_model* m, const char* mmproj_path,
     // The prompt is ALREADY fully templated (the agent's <|im_start|> system + <tools> + turns) with the media
     // marker embedded in the last user turn; mtmd_tokenize swaps the marker for the in-memory image. add_special
     // / parse_special = true, matching hl_complete's verbatim tokenize.
-    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false).bitmap;
+    auto media = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false, mtmd_helper_init_opt_default());
+    mtmd::bitmap_ptr bmp(media.bitmap);
+    mtmd_helper::video_ptr video(media.video_ctx);
     if (!bmp) { llama_free(ctx); mtmd_free(mctx); return -1; }
 
-    mtmd_input_text it{ prompt, true, true };
+    mtmd_input_text it{ prompt, strlen(prompt), true, true };
     mtmd_input_chunks* chunks = mtmd_input_chunks_init();
-    const mtmd_bitmap* bmps[1] = { bmp };
+    const mtmd_bitmap* bmps[1] = { bmp.get() };
     int tok = mtmd_tokenize(mctx, chunks, &it, bmps, 1);
-    mtmd_bitmap_free(bmp);
+    bmp.reset();
+    video.reset();
     if (tok != 0) { mtmd_input_chunks_free(chunks); llama_free(ctx); mtmd_free(mctx); return -1; }
 
     const auto t_start = std::chrono::steady_clock::now();
@@ -285,7 +292,8 @@ int hl_complete_image(hl_model* m, const char* mmproj_path,
     llama_sampler_chain_params sp = llama_sampler_chain_default_params();
     llama_sampler* smpl = llama_sampler_chain_init(sp);
     if (repeat_penalty > 1.0f) {
-        llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, repeat_penalty, 0.0f, 0.0f));
+        llama_sampler_chain_add(smpl,
+            llama_sampler_init_penalties(llama_vocab_n_tokens(vocab), 64, repeat_penalty, 0.0f, 0.0f));
     }
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k > 0 ? top_k : 40));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p > 0.0f ? top_p : 0.95f, 1));
@@ -338,11 +346,8 @@ int hl_ocr(hl_model* m, const char* mmproj_path,
     if (!m || !m->model || !mmproj_path || !image_buf || image_len <= 0 || !user_prompt || !out || out_cap <= 0) return -1;
     const llama_vocab* vocab = llama_model_get_vocab(m->model);
 
-    // multimodal context (loads the mmproj/clip). The GLM4V vision encoder runs full O(n^2) attention over the
-    // patch grid (HF parity: Glm4vVisionModel has no windowing); at OCR resolution a 8+ MP image is a ~42k-patch
-    // grid whose fp32 KQ score matrix reserves ~85 GiB and OOMs a 32 GiB card. Flash attention (ggml_flash_attn_ext,
-    // matching HF's SDPA path) never materializes that matrix and bounds the vision buffer to a few GiB. warmup is
-    // off here, so AUTO would never resolve to ENABLED (the resolve runs only under mtmd warmup) — force ENABLED.
+    // GLM4V uses full attention over the vision patch grid. Flash attention keeps its score matrix bounded at
+    // OCR resolutions; warmup is disabled here, so AUTO cannot resolve it on this path.
     mtmd_context_params mp = mtmd_context_params_default();
     mp.use_gpu          = true;
     mp.print_timings    = false;
@@ -352,8 +357,6 @@ int hl_ocr(hl_model* m, const char* mmproj_path,
     mtmd_context* mctx = mtmd_init_from_file(mmproj_path, m->model, mp);
     if (!mctx) return -1;
 
-    // The text decode context keeps flash_attn off (the separate sm_120a decode-FA concern); only the vision
-    // encoder above needs it, and that is where the O(n^2) blow-up lives.
     llama_context_params cp = llama_context_default_params();
     cp.n_ctx           = (uint32_t)(n_ctx   > 0 ? n_ctx   : 8192);
     cp.n_ubatch        = (uint32_t)(n_ubatch > 0 ? n_ubatch : 2048);
@@ -374,14 +377,17 @@ int hl_ocr(hl_model* m, const char* mmproj_path,
     if (fn <= 0) { llama_free(ctx); mtmd_free(mctx); return -1; }
     std::string full(fbuf.data(), (size_t)fn);
 
-    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false).bitmap;
+    auto media = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false, mtmd_helper_init_opt_default());
+    mtmd::bitmap_ptr bmp(media.bitmap);
+    mtmd_helper::video_ptr video(media.video_ctx);
     if (!bmp) { llama_free(ctx); mtmd_free(mctx); return -1; }
 
-    mtmd_input_text it{ full.c_str(), true, true };
+    mtmd_input_text it{ full.c_str(), full.size(), true, true };
     mtmd_input_chunks* chunks = mtmd_input_chunks_init();
-    const mtmd_bitmap* bmps[1] = { bmp };
+    const mtmd_bitmap* bmps[1] = { bmp.get() };
     int tok = mtmd_tokenize(mctx, chunks, &it, bmps, 1);
-    mtmd_bitmap_free(bmp);
+    bmp.reset();
+    video.reset();
     if (tok != 0) { mtmd_input_chunks_free(chunks); llama_free(ctx); mtmd_free(mctx); return -1; }
 
     const auto t_start = std::chrono::steady_clock::now();
@@ -392,16 +398,15 @@ int hl_ocr(hl_model* m, const char* mmproj_path,
     if (ev != 0) { llama_free(ctx); mtmd_free(mctx); return -1; }
     const auto t_prefilled = std::chrono::steady_clock::now();
 
-    // Sampler chain. OCR default is GREEDY (argmax): GLM-OCR ships do_sample=false, and greedy is the deterministic
-    // transcription the qualification study ran; the entropy post-filter backstops the dense-grid loop greedy risks
-    // (Holtzman). temp<=0 selects greedy; temp>0 samples (penalty -> top-k -> top-p -> temp -> dist) for A/B tests.
+    // GLM-OCR's reference decode is greedy. Positive temperature remains available for explicit sampling probes.
     llama_sampler_chain_params sp = llama_sampler_chain_default_params();
     llama_sampler* smpl = llama_sampler_chain_init(sp);
     if (temp <= 0.0f) {
         llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
     } else {
         if (repeat_penalty > 1.0f) {
-            llama_sampler_chain_add(smpl, llama_sampler_init_penalties(64, repeat_penalty, 0.0f, 0.0f));
+            llama_sampler_chain_add(smpl,
+                llama_sampler_init_penalties(llama_vocab_n_tokens(vocab), 64, repeat_penalty, 0.0f, 0.0f));
         }
         llama_sampler_chain_add(smpl, llama_sampler_init_top_k(top_k > 0 ? top_k : 40));
         llama_sampler_chain_add(smpl, llama_sampler_init_top_p(top_p > 0.0f ? top_p : 0.95f, 1));
@@ -483,14 +488,17 @@ int hl_embed_image(hl_model* m, const char* mmproj_path,
     llama_context* ctx = hl_embed_ctx(m, n_ctx, n_ubatch);
     if (!ctx) { mtmd_free(mctx); return -1; }
 
-    mtmd_bitmap* bmp = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false).bitmap;
+    auto media = mtmd_helper_bitmap_init_from_buf(mctx, image_buf, (size_t)image_len, false, mtmd_helper_init_opt_default());
+    mtmd::bitmap_ptr bmp(media.bitmap);
+    mtmd_helper::video_ptr video(media.video_ctx);
     if (!bmp) { llama_free(ctx); mtmd_free(mctx); return -1; }
     std::string content = std::string(mtmd_default_marker());   // document = the image
-    mtmd_input_text it{ content.c_str(), true, true };
+    mtmd_input_text it{ content.c_str(), content.size(), true, true };
     mtmd_input_chunks* chunks = mtmd_input_chunks_init();
-    const mtmd_bitmap* bmps[1] = { bmp };
+    const mtmd_bitmap* bmps[1] = { bmp.get() };
     int tok = mtmd_tokenize(mctx, chunks, &it, bmps, 1);
-    mtmd_bitmap_free(bmp);
+    bmp.reset();
+    video.reset();
     if (tok != 0) { mtmd_input_chunks_free(chunks); llama_free(ctx); mtmd_free(mctx); return -1; }
     llama_pos n_past = 0;
     int ev = mtmd_helper_eval_chunks(mctx, ctx, chunks, /*n_past*/0, /*seq_id*/0, /*n_batch*/(int32_t)2048, /*logits_last*/true, &n_past);

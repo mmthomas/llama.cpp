@@ -41,8 +41,7 @@ ggml_cgraph * clip_graph_glm4v::build() {
     inp = ggml_add(ctx0, inp, model.patch_bias);
     cb(inp, "patch_bias", -1);
 
-    // pos-conv norm (GLM-4.1V has post_conv_layernorm; GLM-OCR does not — guard so the RMS-norm
-    // isn't applied unconditionally when the weight is absent)
+    // GLM-OCR has no post-convolution norm weights.
     if (model.norm_embd_w != nullptr) {
         inp = build_norm(inp, model.norm_embd_w, model.norm_embd_b, norm_t, eps, -1);
     }

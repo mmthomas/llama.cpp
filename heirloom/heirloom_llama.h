@@ -42,8 +42,9 @@ HL_API int hl_complete(hl_model* m, const char* prompt, int n_predict,
                        char* out, int out_cap);
 
 // Vision: caption/answer about an image via an mmproj (multimodal projector). Applies the model's chat
-// template around (media-marker + user_prompt), runs the mtmd encode+decode, then generates. flash_attn
-// forced off (sm_120a). image_min_tokens<=0 = model default (Qwen-VL wants >=1024 for grounding).
+// template around (media-marker + user_prompt), runs the mtmd encode+decode, then generates.
+// Vision flash attention is enabled; decoder flash attention stays disabled.
+// image_min_tokens<=0 = model default (Qwen-VL wants >=1024 for grounding).
 // Writes a null-terminated UTF-8 string into out. Returns bytes written, or -1.
 HL_API int hl_caption(hl_model* m, const char* mmproj_path, const char* image_path, const char* user_prompt,
                       int n_predict, int n_ctx, int n_ubatch, int image_min_tokens,
@@ -53,8 +54,9 @@ HL_API int hl_caption(hl_model* m, const char* mmproj_path, const char* image_pa
 // caller owns the full chat template (system + <tools> + history turns) and embeds mtmd's image marker
 // ("<__media__>", see mtmd_default_marker()) in the last user turn; mtmd swaps the marker for the image
 // (passed as in-memory JPEG/PNG bytes — no temp file). Then it generates with the same caller-tuned sampler +
-// cooperative cancel as hl_complete, so the model can answer in plain text OR emit a <tool_call>. flash_attn
-// forced off (sm_120a). image_min_tokens<=0 = model default. Returns bytes written, or -1.
+// cooperative cancel as hl_complete, so the model can answer in plain text OR emit a <tool_call>.
+// Vision flash attention is enabled; decoder flash attention stays disabled.
+// image_min_tokens<=0 = model default. Returns bytes written, or -1.
 HL_API int hl_complete_image(hl_model* m, const char* mmproj_path,
                              const unsigned char* image_buf, int image_len,
                              const char* prompt, int n_predict,
@@ -67,7 +69,7 @@ HL_API int hl_complete_image(hl_model* m, const char* mmproj_path,
 // the caller's sampler + cooperative cancel; like hl_caption it applies the MODEL's own chat template around
 // (media-marker + user_prompt) — so the caller passes only the OCR instruction (e.g. "Text Recognition:") and the
 // image, never template scaffolding. Its own purpose-built path for the OCR sweep (no overload of the others).
-// flash_attn forced off (sm_120a). image_min_tokens<=0 = model default. Returns bytes written, or -1.
+// Vision flash attention stays enabled; decoder stays disabled. image_min_tokens<=0 = model default. Returns bytes written, or -1.
 HL_API int hl_ocr(hl_model* m, const char* mmproj_path,
                   const unsigned char* image_buf, int image_len,
                   const char* user_prompt, int n_predict,

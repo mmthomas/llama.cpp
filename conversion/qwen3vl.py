@@ -14,6 +14,7 @@ from .qwenvl import Qwen25AudioModel
 
 
 @ModelBase.register("Qwen3VLForConditionalGeneration", "Qwen3VLMoeForConditionalGeneration", "Qwen3_5ForConditionalGeneration", "Qwen3_5MoeForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-VL-4B-Instruct", "Qwen/Qwen3-VL-30B-A3B-Instruct", "Qwen/Qwen3.5-9B", "Qwen/Qwen3.5-35B-A3B")
 class Qwen3VLVisionModel(MmprojModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -144,6 +145,7 @@ class Qwen3VLVisionModel(MmprojModel):
 
 
 @ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-Omni-30B-A3B-Instruct")
 class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
     has_audio_encoder = True
     has_vision_encoder = True
@@ -217,12 +219,14 @@ class Qwen3OmniMmprojModel(Qwen3VLVisionModel, Qwen25AudioModel):
 
 
 @ModelBase.register("Qwen3ASRForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-ASR-0.6B-hf")
 class Qwen3ASRMmprojModel(Qwen3OmniMmprojModel):
     has_audio_encoder = True
     has_vision_encoder = False
 
 
 @ModelBase.register("Glm4vForConditionalGeneration", "Glm4vMoeForConditionalGeneration", "GlmOcrForConditionalGeneration")
+@ModelBase.example("zai-org/GLM-4.1V-9B-Thinking", "zai-org/GLM-4.5V")
 class Glm4VVisionModel(Qwen3VLVisionModel):
     def set_gguf_parameters(self):
         MmprojModel.set_gguf_parameters(self) # skip Qwen3VLVisionModel parameters
@@ -238,13 +242,12 @@ class Glm4VVisionModel(Qwen3VLVisionModel):
         rms_norm_eps = self.hparams_vision.get("rms_norm_eps", 1e-5)
         self.gguf_writer.add_vision_attention_layernorm_eps(rms_norm_eps)
 
-        # smart_resize bounds: size.{shortest_edge,longest_edge} carry the min/max
-        # pixel area; accept min_pixels/max_pixels for configs that spell them out
         size = self.preprocessor_config.get("size", {})
         min_pixels = self.preprocessor_config.get("min_pixels", size.get("shortest_edge"))
         max_pixels = self.preprocessor_config.get("max_pixels", size.get("longest_edge"))
         if min_pixels is None or max_pixels is None:
-            raise KeyError("GLM4V preprocessor_config is missing image pixel bounds (min_pixels/max_pixels or size.shortest_edge/longest_edge)")
+            raise KeyError("GLM4V preprocessor_config is missing image pixel bounds "
+                           "(min_pixels/max_pixels or size.shortest_edge/longest_edge)")
         self.gguf_writer.add_vision_min_pixels(int(min_pixels))
         self.gguf_writer.add_vision_max_pixels(int(max_pixels))
 
@@ -256,6 +259,7 @@ class Glm4VVisionModel(Qwen3VLVisionModel):
 
 
 @ModelBase.register("Qwen3VLForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-VL-4B-Instruct")
 class Qwen3VLTextModel(Qwen3Model):
     model_arch = gguf.MODEL_ARCH.QWEN3VL
 
@@ -278,6 +282,7 @@ class Qwen3VLTextModel(Qwen3Model):
 
 
 @ModelBase.register("Qwen3VLMoeForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-VL-30B-A3B-Instruct")
 class Qwen3VLMoeTextModel(Qwen3MoeModel):
     model_arch = gguf.MODEL_ARCH.QWEN3VLMOE
 
@@ -327,6 +332,7 @@ class Qwen3VLMoeTextModel(Qwen3MoeModel):
 
 
 @ModelBase.register("Qwen3OmniMoeForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-Omni-30B-A3B-Instruct")
 class Qwen3OmniMoeTextModel(Qwen3VLMoeTextModel):
     model_arch = gguf.MODEL_ARCH.QWEN3VLMOE
 
@@ -348,6 +354,7 @@ class Qwen3OmniMoeTextModel(Qwen3VLMoeTextModel):
 
 
 @ModelBase.register("Qwen3ASRForConditionalGeneration")
+@ModelBase.example("Qwen/Qwen3-ASR-0.6B-hf")
 class Qwen3ASRTextModel(Qwen3VLTextModel):
     model_arch = gguf.MODEL_ARCH.QWEN3VL
 
