@@ -6,3 +6,11 @@ target_include_directories(heirloom_llama PRIVATE "${CMAKE_SOURCE_DIR}/tools/mtm
 set_target_properties(heirloom_llama PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+if (LLAMA_BUILD_TESTS)
+    enable_testing()
+    add_executable(test-heirloom-sampler test-heirloom-sampler.cpp)
+    target_link_libraries(test-heirloom-sampler PRIVATE llama)
+    add_test(NAME test-heirloom-sampler COMMAND $<TARGET_FILE:test-heirloom-sampler>)
+    set_property(TEST test-heirloom-sampler PROPERTY LABELS "heirloom")
+endif()
